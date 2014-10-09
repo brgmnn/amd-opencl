@@ -7,44 +7,125 @@
 #include <sstream>
 #include <CL/cl.h>
 
-// These are typical values used in the simulation.
-size_t size_atom    = 16,
-       size_conf    = 8,
-       size_orien   = 32;
+#include "types.hpp"
 
-unsigned int natoms_f   = 64,
-             natoms_m   = 79,
-             nconfs     = 25033,
-             nmols      = 255,
-             nkeep      = 200,
-             norients   = nmols * nkeep;
+// values used on my nvidia machine in the working codebase
+size_t globalsize = 42752;
+size_t localsize  = 128;
 
-// This function just fills a pointer array with junk. For the purposes of this application, it
-// should be fine to do this as we don't care what the kernel computes.
-void fill(void* vptr, size_t len) {
-    unsigned char* ptr = (unsigned char*)vptr;
-    for (int i=0; i<len; i++)
-        ptr[i] = i%255;
+// Read in from a file a generic primitive type. In our case this will either be floats or shorts.
+template <typename T>
+T* load(const char *path, const size_t size) {
+    T *arr = (T*)malloc(size*sizeof(T));
+    std::ifstream fp;
+    fp.open(path);
+
+    for (int i=0; i<size; i++) {
+        fp >> arr[i];
+    }
+
+    fp.close();
+    return arr;
 }
 
+// Read in atoms from a file.
+template <>
+Atom* load<Atom>(const char *path, const size_t size) {
+    Atom *arr = (Atom*)malloc(size*sizeof(Atom));
+    std::ifstream fp;
+    fp.open(path);
+
+    for (int i=0; i<size; i++) {
+        fp >> arr[i].x;
+        fp >> arr[i].y;
+        fp >> arr[i].z;
+        fp >> arr[i].chge;
+    }
+
+    fp.close();
+    return arr;
+}
+
+// Read in ConfInfos from a file.
+template <>
+ConfInfo* load<ConfInfo>(const char *path, const size_t size) {
+    ConfInfo *arr = (ConfInfo*)malloc(size*sizeof(ConfInfo));
+    std::ifstream fp;
+    fp.open(path);
+
+    for (int i=0; i<size; i++) {
+        fp >> arr[i].natoms;
+        fp >> arr[i].nxeds;
+        fp >> arr[i].nfields;
+        fp >> arr[i].norients;
+    }
+
+    fp.close();
+    return arr;
+}
+
+// Read in Orientations from a file.
+template <>
+Orientation* load<Orientation>(const char *path, const size_t size) {
+    Orientation *arr = (Orientation*)malloc(size*sizeof(Orientation));
+    std::ifstream fp;
+    fp.open(path);
+
+    for (int i=0; i<size; i++) {
+        fp >> arr[i].m_orient[0];
+        fp >> arr[i].m_orient[1];
+        fp >> arr[i].m_orient[2];
+        fp >> arr[i].m_orient[3];
+        fp >> arr[i].m_trans[0];
+        fp >> arr[i].m_trans[1];
+        fp >> arr[i].m_trans[2];
+        fp >> arr[i].gid;
+        fp >> arr[i].m_inverted;
+    }
+
+    fp.close();
+    return arr;
+}
+
+
 int main() {
-    size_t worksize = 64;
+    unsigned int natoms_f, natoms_m, nconfs,
+                 nmols, nkeep, norients;
+
+    Atom  *atoms_f, *atoms_m;
+    short *anat_f, *anat_m;
+    ConfInfo *cinfo;
+    Orientation *orients_new, *orients_new_ref;
+    float *vsim_raw, *vsim_raw_ref;
+
     char build_c[10000];
     cl_int error;
     cl_platform_id platform;
     cl_device_id device;
     cl_uint platforms, devices;
 
-    char opt[] = "-cl-mad-enable -cl-fast-relaxed-math \
-            -D NATOMS0=64 -D NXEDS0=50 -D NFIELDS0=48 \
-            -D MAXCLIQUE=50 -D NKEEP=200 -D NCONS=0 \
-            -D NATOMS1=79 -D NXEDS1=105 -D NFIELDS1=74 \
-            -D NCONFS=25033 -D MAXFLD=600 -D MAXSCR=42 -D NFEND0=30 \
-            -D GAUSSIAN_FOUR_WAY_OVERLAPS \
-            -D GAUSSIAN_SIX_WAY_OVERLAPS \
-            -D GAUSSIAN_EIGHT_WAY_OVERLAPS \
-            ";
+    // Read in the size values.
+    std::ifstream fp;
+    fp.open("./data/sizes.csv");
+    fp >> natoms_f;
+    fp >> natoms_m;
+    fp >> nconfs;
+    fp >> nmols;
+    fp >> nkeep;
+    norients = nmols*nkeep;
+    fp.close();
 
+    // Load the different buffers from CSV files.
+    atoms_f = load<Atom>("./data/atoms_f.csv", natoms_f);
+    atoms_m = load<Atom>("./data/atoms_m.csv", natoms_m*nconfs);
+    anat_f = load<short>("./data/anat_f.csv", natoms_f);
+    anat_m = load<short>("./data/anat_f.csv", natoms_m*nconfs);
+    cinfo = load<ConfInfo>("./data/cinfo.csv", nconfs);
+    orients_new = load<Orientation>("./data/orients_new.csv", norients);
+    vsim_raw = load<float>("./data/vsim_raw.csv", norients);
+
+    orients_new_ref = load<Orientation>("./data/orients_new_ref.csv", norients);
+    vsim_raw_ref = load<float>("./data/vsim_raw_ref.csv", norients);
 
     // Fetch the Platforms, we only want one.
     error=clGetPlatformIDs(1, &platform, &platforms);
@@ -63,6 +144,11 @@ int main() {
     cl_command_queue cq = clCreateCommandQueue(context, device, 0, &error);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
 
+    // set all params for kernels
+    char opt[200];
+    sprintf(opt, "-cl-mad-enable -cl-fast-relaxed-math -D NATOMS0=%d -D NATOMS1=%d -D NCONFS=%d \
+            -D NKEEP=%d -D GAUSSIAN_FOUR_WAY_OVERLAPS -D GAUSSIAN_SIX_WAY_OVERLAPS \
+            -D GAUSSIAN_EIGHT_WAY_OVERLAPS", natoms_f, natoms_m, nconfs, nkeep);
 
     // read in the kernel source
     std::ifstream t("kernel/volume-ab.cl");
@@ -92,46 +178,28 @@ int main() {
     cl_mem mem_atoms_f, mem_atoms_m, mem_anat_f, mem_anat_m, mem_cinfo,
            mem_orients_new, mem_vsim_raw;
 
-    // allocate buffers and fill with data
-    unsigned char *atoms_f      = (unsigned char*)malloc(natoms_f*size_atom),
-                  *atoms_m      = (unsigned char*)malloc(natoms_m*nconfs*size_atom),
-                  *cinfo        = (unsigned char*)malloc(nconfs*size_conf),
-                  *orients_new  = (unsigned char*)malloc(nmols*nkeep*size_orien),
-                  *vsim_raw     = (unsigned char*)malloc(norients*sizeof(float));
-    unsigned short *anat_f  = (unsigned short*)malloc(natoms_f*sizeof(short)),
-                   *anat_m  = (unsigned short*)malloc(natoms_m*nconfs*sizeof(short));
-
-    fill(atoms_f, natoms_f*size_atom);
-    fill(atoms_m, natoms_m*nconfs*size_atom);
-    fill(anat_f, natoms_f*sizeof(short));
-    fill(anat_m, natoms_m*nconfs*sizeof(short));
-    fill(cinfo, nconfs*size_conf);
-    fill(orients_new, nmols*nkeep*size_orien);
-    fill(vsim_raw, norients*sizeof(float));
-
-
     // alocate memory for buffers
-    mem_atoms_f = clCreateBuffer(context, CL_MEM_READ_ONLY, natoms_f*size_atom, NULL, &error);
+    mem_atoms_f = clCreateBuffer(context, CL_MEM_READ_ONLY, natoms_f*sizeof(Atom), NULL, &error);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
-    mem_atoms_m = clCreateBuffer(context, CL_MEM_READ_ONLY, natoms_m*nconfs*size_atom, NULL, &error);
+    mem_atoms_m = clCreateBuffer(context, CL_MEM_READ_ONLY, natoms_m*nconfs*sizeof(Atom), NULL, &error);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
     mem_anat_f = clCreateBuffer(context, CL_MEM_READ_ONLY, natoms_f*sizeof(short), NULL, &error);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
     mem_anat_m = clCreateBuffer(context, CL_MEM_READ_ONLY, natoms_m*nconfs*sizeof(short), NULL, &error);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
-    mem_cinfo = clCreateBuffer(context, CL_MEM_READ_WRITE, nconfs*size_conf, NULL, &error);
+    mem_cinfo = clCreateBuffer(context, CL_MEM_READ_WRITE, nconfs*sizeof(ConfInfo), NULL, &error);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
-    mem_orients_new = clCreateBuffer(context, CL_MEM_READ_WRITE, nmols*nkeep*size_orien, NULL, &error);
+    mem_orients_new = clCreateBuffer(context, CL_MEM_READ_WRITE, nmols*nkeep*sizeof(Orientation), NULL, &error);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
     mem_vsim_raw = clCreateBuffer(context, CL_MEM_READ_WRITE, norients*sizeof(float), NULL, &error);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
 
     // Create a kernel object with the compiled program
-    //cl_kernel k_example=clCreateKernel(prog, "example", &error);
     cl_kernel k_example=clCreateKernel(prog, "mol_overlap_AB", &error);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
 
     // Set the kernel parameters
+    unsigned int unorients = norients;
     error = clSetKernelArg(k_example, 0, sizeof(mem_atoms_f), &mem_atoms_f);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
     error = clSetKernelArg(k_example, 1, sizeof(mem_atoms_m), &mem_atoms_m);
@@ -146,35 +214,42 @@ int main() {
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
     error = clSetKernelArg(k_example, 6, sizeof(mem_vsim_raw), &mem_vsim_raw);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
-    error = clSetKernelArg(k_example, 7, sizeof(unsigned int), &norients);
+    error = clSetKernelArg(k_example, 7, sizeof(unsigned int), &unorients);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
-
-    unsigned int norients = 255*200;
-    //vsim_AB->setArg<unsigned int>(7,norients);
 
     // Send input data to OpenCL (async, don't alter the buffer!)
-    error=clEnqueueWriteBuffer(cq, mem_atoms_f, CL_FALSE, 0, natoms_f*size_atom, atoms_f, 0, NULL, NULL);
+    error=clEnqueueWriteBuffer(cq, mem_atoms_f, CL_FALSE, 0, natoms_f*sizeof(Atom), atoms_f, 0, NULL, NULL);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
-    error=clEnqueueWriteBuffer(cq, mem_atoms_m, CL_FALSE, 0, natoms_m*nconfs*size_atom, atoms_m, 0, NULL, NULL);
+    error=clEnqueueWriteBuffer(cq, mem_atoms_m, CL_FALSE, 0, natoms_m*nconfs*sizeof(Atom), atoms_m, 0, NULL, NULL);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
     error=clEnqueueWriteBuffer(cq, mem_anat_f,  CL_FALSE, 0, natoms_f*sizeof(short), anat_f, 0, NULL, NULL);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
     error=clEnqueueWriteBuffer(cq, mem_anat_m,  CL_FALSE, 0, natoms_m*nconfs*sizeof(short), anat_m, 0, NULL, NULL);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
-    error=clEnqueueWriteBuffer(cq, mem_cinfo,   CL_FALSE, 0, nconfs*size_conf, cinfo, 0, NULL, NULL);
+    error=clEnqueueWriteBuffer(cq, mem_cinfo,   CL_FALSE, 0, nconfs*sizeof(ConfInfo), cinfo, 0, NULL, NULL);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
-    error=clEnqueueWriteBuffer(cq, mem_orients_new, CL_FALSE, 0, nmols*nkeep*size_orien, orients_new, 0, NULL, NULL);
+    error=clEnqueueWriteBuffer(cq, mem_orients_new, CL_FALSE, 0, nmols*nkeep*sizeof(Orientation), orients_new, 0, NULL, NULL);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
     error=clEnqueueWriteBuffer(cq, mem_vsim_raw, CL_FALSE, 0, norients*sizeof(float), vsim_raw, 0, NULL, NULL);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
 
     // execute kernel
-    error=clEnqueueNDRangeKernel(cq, k_example, 1, NULL, &worksize, &worksize, 0, NULL, NULL);
+    error=clEnqueueNDRangeKernel(cq, k_example, 1, NULL, &globalsize, &localsize, 0, NULL, NULL);
+    if (error != CL_SUCCESS) printf("\n Error number %d", error);
+    error=clFinish(cq);
+
+    /* Read the result back into buf2 */
+    error=clEnqueueReadBuffer(cq, mem_orients_new, CL_FALSE, 0, nmols*nkeep*sizeof(Orientation), orients_new, 0, NULL, NULL);
+    if (error != CL_SUCCESS) printf("\n Error number %d", error);
+    error=clEnqueueReadBuffer(cq, mem_vsim_raw, CL_FALSE, 0, norients*sizeof(float), vsim_raw, 0, NULL, NULL);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
 
     // Await completion of all the above
     error=clFinish(cq);
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
+
+    //for (int i=0; i<10; i++)
+    //    std::cout << vsim_raw[i] << " - " << vsim_raw_ref[i] << std::endl;
 
     return 0;
 }

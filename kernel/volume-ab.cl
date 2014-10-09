@@ -394,8 +394,11 @@ __kernel void mol_overlap_AB(__global const Atom * atoms0,__global const Atom * 
                                                                 for(int c = 0; c < 7; c++) {
                                                                     lnKsum[7]+=a[ic[c]]*a[ic[7]]*dists[c];
                                                                 }
+
                                                                 if(ic[7] >= NATOMS0) {
                                                                     dv = native_powr(p,8) * native_exp(native_divide(-lnKsum[7],delta[7])) * native_powr(native_divide(pi,delta[7]),1.5f);
+                                                                    // cant access lnKsum[7] here
+                                                                    // for some reason...
                                                                     volume+=dv;
                                                                     volumes[7]+=dv;
                                                                     counts[7]+=1;
