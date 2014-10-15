@@ -145,10 +145,12 @@ int main() {
     if (error != CL_SUCCESS) printf("\n Error number %d", error);
 
     // set all params for kernels
-    char opt[200];
-    sprintf(opt, "-cl-mad-enable -cl-fast-relaxed-math -D NATOMS0=%d -D NATOMS1=%d -D NCONFS=%d \
-            -D NKEEP=%d -D GAUSSIAN_FOUR_WAY_OVERLAPS -D GAUSSIAN_SIX_WAY_OVERLAPS \
-            -D GAUSSIAN_EIGHT_WAY_OVERLAPS", natoms_f, natoms_m, nconfs, nkeep);
+    char opt[400];
+    sprintf(opt, "-cl-mad-enable -cl-fast-relaxed-math -O1 -D NATOMS0=%d \
+                -D NATOMS1=%d -D NCONFS=%d -D NKEEP=%d \
+                -D GAUSSIAN_FOUR_WAY_OVERLAPS -D GAUSSIAN_SIX_WAY_OVERLAPS \
+                -D GAUSSIAN_EIGHT_WAY_OVERLAPS",
+                natoms_f, natoms_m, nconfs, nkeep);
 
     // read in the kernel source
     std::ifstream t("kernel/volume-ab.cl");
