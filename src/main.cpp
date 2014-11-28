@@ -146,10 +146,9 @@ int main() {
 
     // set all params for kernels
     char opt[400];
-    sprintf(opt, "-cl-mad-enable -cl-fast-relaxed-math -O1 -D NATOMS0=%d \
+    sprintf(opt, "-cl-mad-enable -cl-fast-relaxed-math -O0 -D NATOMS0=%d \
                 -D NATOMS1=%d -D NCONFS=%d -D NKEEP=%d \
-                -D GAUSSIAN_FOUR_WAY_OVERLAPS -D GAUSSIAN_SIX_WAY_OVERLAPS \
-                -D GAUSSIAN_EIGHT_WAY_OVERLAPS",
+                -D GAUSSIAN_FOUR_WAY_OVERLAPS -D GAUSSIAN_SIX_WAY_OVERLAPS",
                 natoms_f, natoms_m, nconfs, nkeep);
 
     // read in the kernel source
